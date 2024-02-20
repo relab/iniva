@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package inivapb;
+
+import "gorums.proto";
+
+import "google/protobuf/empty.proto";
+
+import "hotstuffpb/hotstuff.proto";
+
+option go_package = "github.com/relab/hotstuff/internal/proto/inivapb";
+
+service Iniva {
+  rpc SendAcknowledgement(Contribution) returns (google.protobuf.Empty) {
+    option (gorums.unicast) = true;
+  }
+  rpc SendContribution(Contribution) returns (google.protobuf.Empty) {
+    option (gorums.unicast) = true;
+  }
+  rpc SecondChance(hotstuffpb.Proposal) returns (google.protobuf.Empty) {
+    option (gorums.unicast) = true;
+  }
+}
+
+message Contribution {
+  uint32 ID = 1;
+  hotstuffpb.QuorumSignature Signature = 2;
+  uint64 View = 3;
+}
