@@ -216,8 +216,8 @@ func (cs *consensusBase) OnPropose(proposal hotstuff.ProposeMsg) { //nolint:gocy
 	if b := cs.impl.CommitRule(block); b != nil {
 		cs.commit(b)
 	}
-
-	if block.View() <= cs.lastVote {
+	//This may be the second chance, if iniva is enabled
+	if block.View() <= cs.lastVote && cs.iniva == nil {
 		cs.logger.Info("OnPropose: block view too old", block.View(), cs.lastVote)
 		return
 	}

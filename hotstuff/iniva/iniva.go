@@ -205,9 +205,12 @@ func (r *Iniva) performSecondChance() {
 	r.cancel = cancel
 	go func() {
 		<-context.Done()
-		r.synchronizer.AdvanceView(hotstuff.NewSyncInfo().WithQC(
-			hotstuff.NewQuorumCert(r.aggregatedContribution, r.ProposalMsg.Block.View(),
-				r.ProposalMsg.Block.Hash())))
+		//TODO(Since we are stopping the synchronizer timeout behavior, we need to implement something similar here)
+		if r.aggregatedContribution.Participants().Len() >= hotstuff.QuorumSize(r.configuration.Len()) {
+			r.synchronizer.AdvanceView(hotstuff.NewSyncInfo().WithQC(
+				hotstuff.NewQuorumCert(r.aggregatedContribution, r.ProposalMsg.Block.View(),
+					r.ProposalMsg.Block.Hash())))
+		}
 	}()
 }
 
