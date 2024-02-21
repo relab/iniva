@@ -57,11 +57,11 @@ func (t *TreeConfiguration) GetChildren() []hotstuff.ID {
 }
 
 func (t *TreeConfiguration) isWithInIndex(position int) bool {
-	if position < t.ConfigurationLength {
-		return true
-	} else {
+	if position >= t.ConfigurationLength {
 		return false
 	}
+
+	return true
 }
 func (t *TreeConfiguration) GetGrandParent() (hotstuff.ID, bool) {
 	parent, ok := t.GetParent()
@@ -133,9 +133,7 @@ func (t *TreeConfiguration) GetSubTreeNodes(nodeID hotstuff.ID) []hotstuff.ID {
 	queue := make([]hotstuff.ID, 0)
 	queue = append(queue, children...)
 	subTreeNodes = append(subTreeNodes, children...)
-	if len(children) == 0 {
-		return subTreeNodes
-	} else {
+	if len(children) != 0 {
 		for len(queue) > 0 {
 			child := queue[0]
 			queue = queue[1:]
@@ -143,6 +141,8 @@ func (t *TreeConfiguration) GetSubTreeNodes(nodeID hotstuff.ID) []hotstuff.ID {
 			subTreeNodes = append(subTreeNodes, children...)
 			queue = append(queue, children...)
 		}
+	} else {
+		return subTreeNodes
 	}
 	return subTreeNodes
 }

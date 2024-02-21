@@ -1,3 +1,4 @@
+// Package iniva implements proposal dissemination and vote aggregation
 package iniva
 
 import (
@@ -25,10 +26,10 @@ func init() {
 
 const (
 	contributionWait = 800 * time.Millisecond
-	leaderWait       = 300 * time.Millisecond
+	leaderWait       = 50 * time.Millisecond
 )
 
-// Handel implements a signature aggregation protocol.
+// Iniva implements a signature aggregation protocol.
 type Iniva struct {
 	//sync.Mutex
 	configuration          *backend.Config
@@ -62,6 +63,7 @@ func New() modules.Iniva {
 	}
 }
 
+// InitModule initializes the iniva module
 func (r *Iniva) InitModule(mods *modules.Core) {
 	mods.Get(
 		&r.configuration,
@@ -99,6 +101,7 @@ func (r *Iniva) postInit() {
 	r.logger.Debug("Iniva: Configuration initialization completed")
 }
 
+// Begin starts dissemination and aggregation process
 func (r *Iniva) Begin(s hotstuff.PartialCert, p hotstuff.ProposeMsg) {
 	r.logger.Debug("Received proposal from ", p.ID)
 	if !r.initDone {
@@ -108,6 +111,7 @@ func (r *Iniva) Begin(s hotstuff.PartialCert, p hotstuff.ProposeMsg) {
 		r.postInit()
 	}
 	if p.SecondChance {
+		r.logger.Debug("Received second chance")
 		//Already seen the proposal, so sending aggregated signature
 		if r.currentView == p.Block.QuorumCert().View() {
 			r.SendContributionToNode(p.Block.Proposer(), r.aggregatedContribution)
@@ -122,8 +126,12 @@ func (r *Iniva) Begin(s hotstuff.PartialCert, p hotstuff.ProposeMsg) {
 	r.ProposalMsg = p
 	r.currentView = p.Block.View()
 	r.aggregatedContribution = s.Signature()
-	idMappings := r.randomizeIDS(p.Block.Hash(), r.leaderRotation.GetLeader(r.ProposalMsg.Block.View()))
+	idMappings := r.randomizeIDs(p.Block.Hash(), r.leaderRotation.GetLeader(r.ProposalMsg.Block.View()))
 	r.logger.Debug("id mappings are ", idMappings)
+	// To test second chance.
+	// if idMappings[r.opts.ID()] == r.configuration.Len()-1 {
+	// 	return
+	// }
 	r.tree.InitializeWithPIDs(idMappings)
 	r.children = r.tree.GetChildren()
 	if len(r.children) == 0 {
@@ -132,10 +140,11 @@ func (r *Iniva) Begin(s hotstuff.PartialCert, p hotstuff.ProposeMsg) {
 			r.SendContributionToNode(parent, s.Signature())
 		}
 	} else {
-		r.sendProposalToChildren(p, s.Signature())
+		r.sendProposalToChildren(p)
 	}
 }
 
+// OnContributionRecv handles the incoming contributions
 func (r *Iniva) OnContributionRecv(event ContributionRecvEvent) {
 	if !r.beginDone || event.Contribution.View != uint64(r.ProposalMsg.Block.View()) {
 		r.logger.Debug("Contribution from ", event.Contribution, "  is ignored for view ", r.ProposalMsg.Block.View())
@@ -153,14 +162,15 @@ func (r *Iniva) OnContributionRecv(event ContributionRecvEvent) {
 	r.senders = append(r.senders, hotstuff.ID(contribution.ID))
 	//In second chance cancel only if all replicas replied
 	if r.inSecondChance && r.aggregatedContribution.Participants().Len() == r.configuration.Len() {
+		r.logger.Debug("Completed aggregation in second chance ")
 		r.cancel()
-	} else {
-		//in normal case cancel if all children replied
-		if isSubSet(r.children, r.senders) {
-			r.cancel()
-		}
-		r.logger.Debug("Completed aggregation ")
 	}
+	//in normal case cancel if all children replied
+	if !r.inSecondChance && isSubSet(r.children, r.senders) {
+		r.logger.Debug("Completed aggregation ")
+		r.cancel()
+	}
+
 }
 
 func (r *Iniva) performSecondChance() {
@@ -201,7 +211,7 @@ func (r *Iniva) performSecondChance() {
 	}()
 }
 
-func (r *Iniva) sendProposalToChildren(proposal hotstuff.ProposeMsg, individual hotstuff.QuorumSignature) {
+func (r *Iniva) sendProposalToChildren(proposal hotstuff.ProposeMsg) {
 
 	r.logger.Debug("sending proposal to children ", r.children, proposal)
 	config, err := r.configuration.SubConfig(r.children)
@@ -216,12 +226,13 @@ func (r *Iniva) sendProposalToChildren(proposal hotstuff.ProposeMsg, individual 
 	go func() {
 		<-context.Done()
 		if r.tree.IsRoot(r.opts.ID()) {
+			r.logger.Debug("Context Completed ", r.ProposalMsg.Block.View())
 			if r.aggregatedContribution.Participants().Len() == r.configuration.Len() {
 				r.logger.Debug("Sending NewView ", r.ProposalMsg.Block.View())
 				r.synchronizer.AdvanceView(hotstuff.NewSyncInfo().WithQC(
 					hotstuff.NewQuorumCert(r.aggregatedContribution, r.ProposalMsg.Block.View(),
 						r.ProposalMsg.Block.Hash())))
-			} else if r.aggregatedContribution.Participants().Len() >= r.configuration.QuorumSize() {
+			} else if r.aggregatedContribution.Participants().Len() > 1 {
 				r.logger.Debug("Performing second Chance ", r.ProposalMsg.Block.View())
 				r.performSecondChance()
 			}
@@ -235,6 +246,7 @@ func (r *Iniva) sendProposalToChildren(proposal hotstuff.ProposeMsg, individual 
 	}()
 }
 
+// OnACK verifies and stores the aggregated contribution
 func (r *Iniva) OnACK(event ACKRecvEvent) {
 	if r.ProposalMsg.Block.View() == hotstuff.View(event.contribution.View) {
 		quorumSignature := hotstuffpb.QuorumSignatureFromProto(event.contribution.Signature)
@@ -245,9 +257,7 @@ func (r *Iniva) OnACK(event ACKRecvEvent) {
 }
 
 func (r *Iniva) sendACKToSenders() {
-	if len(r.senders) == 0 || r.aggregatedContribution == nil {
-		return
-	} else {
+	if len(r.senders) != 0 && r.aggregatedContribution != nil {
 		for _, nodeID := range r.senders {
 			node, ok := r.nodes[nodeID]
 			if !ok {
@@ -266,6 +276,7 @@ func (r *Iniva) sendACKToSenders() {
 	}
 }
 
+// SendContributionToNode sends the contribution to a node
 func (r *Iniva) SendContributionToNode(nodeID hotstuff.ID, quorumSignature hotstuff.QuorumSignature) {
 	emptyContribution := &inivapb.Contribution{}
 	node, ok := r.nodes[nodeID]
@@ -339,9 +350,9 @@ func (r *Iniva) mergeWithContribution(currentSignature hotstuff.QuorumSignature)
 
 	//compiledSignature := hotstuffpb.QuorumSignatureFromProto(r.aggregatedContribution.Signature)
 	if r.canMergeContributions(currentSignature, r.aggregatedContribution) {
-		new, err := r.crypto.Combine(currentSignature, r.aggregatedContribution)
+		combined, err := r.crypto.Combine(currentSignature, r.aggregatedContribution)
 		if err == nil {
-			r.aggregatedContribution = new
+			r.aggregatedContribution = combined
 		} else {
 			r.logger.Info("Failed to combine signatures: %v", err)
 			return errors.New("unable to combine signature")
@@ -357,34 +368,33 @@ type serviceImpl struct {
 	r *Iniva
 }
 
-func (i serviceImpl) SendAcknowledgement(ctx gorums.ServerCtx, request *inivapb.Contribution) {
+// SendAcknowledgement Handles incoming acknowledgements
+func (i serviceImpl) SendAcknowledgement(_ gorums.ServerCtx, request *inivapb.Contribution) {
 	i.r.logger.Debug("Received acknowledgment, storing the acknowledgement")
 	i.r.eventLoop.AddEvent(ACKRecvEvent{contribution: request})
 }
 
-func (i serviceImpl) SecondChance(ctx gorums.ServerCtx, proposal *hotstuffpb.Proposal) {
+// Handles SecondChance requests
+func (i serviceImpl) SecondChance(_ gorums.ServerCtx, proposal *hotstuffpb.Proposal) {
 	i.r.logger.Debug("Received second chance proposal")
 	proposeMsg := hotstuffpb.ProposalFromProto(proposal)
 	i.r.eventLoop.AddEvent(proposeMsg)
 }
 
-func (i serviceImpl) SendContribution(ctx gorums.ServerCtx, request *inivapb.Contribution) {
+// SendContribution handles the incoming contribution
+func (i serviceImpl) SendContribution(_ gorums.ServerCtx, request *inivapb.Contribution) {
 
 	i.r.logger.Debug("Received contribution for view ", request.View)
 	i.r.eventLoop.AddEvent(ContributionRecvEvent{Contribution: request})
 
 }
 
+// ContributionRecvEvent is sent when a contribution is received.
 type ContributionRecvEvent struct {
 	Contribution *inivapb.Contribution
 }
 
-type PartialAggregationEvent struct {
-	Proposal hotstuff.ProposeMsg
-	View     hotstuff.View
-}
-
-func (r *Iniva) randomizeIDS(hash hotstuff.Hash, leaderID hotstuff.ID) map[hotstuff.ID]int {
+func (r *Iniva) randomizeIDs(hash hotstuff.Hash, leaderID hotstuff.ID) map[hotstuff.ID]int {
 	//assign leader to the root of the tree.
 	seed := r.opts.SharedRandomSeed() + int64(binary.LittleEndian.Uint64(hash[:]))
 	totalNodes := r.configuration.Len()
@@ -426,6 +436,7 @@ func isSubSet(a, b []hotstuff.ID) bool {
 	return true
 }
 
+// ACKRecvEvent is sent when ACK is received.
 type ACKRecvEvent struct {
 	contribution *inivapb.Contribution
 }
