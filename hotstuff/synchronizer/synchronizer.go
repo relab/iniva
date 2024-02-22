@@ -95,6 +95,10 @@ func New(viewDuration ViewDuration) modules.Synchronizer {
 	}
 }
 
+// ViewDuration returns the duration of the current view
+func (s *Synchronizer) ViewDuration() time.Duration {
+	return s.duration.Duration()
+}
 func (s *Synchronizer) startTimeoutTimer() {
 	duration := s.duration.Duration()
 	s.timer = time.AfterFunc(duration, func() {
@@ -105,7 +109,7 @@ func (s *Synchronizer) startTimeoutTimer() {
 
 // Start starts the synchronizer with the given context.
 func (s *Synchronizer) Start(ctx context.Context) {
-	//s.startTimeoutTimer()
+	s.startTimeoutTimer()
 
 	go func() {
 		<-ctx.Done()

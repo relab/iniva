@@ -24,14 +24,8 @@ func init() {
 	modules.RegisterModule("iniva", New)
 }
 
-const (
-	contributionWait = 800 * time.Millisecond
-	leaderWait       = 50 * time.Millisecond
-)
-
 // Iniva implements a signature aggregation protocol.
 type Iniva struct {
-	//sync.Mutex
 	configuration          *backend.Config
 	server                 *backend.Server
 	blockChain             modules.BlockChain
@@ -52,6 +46,8 @@ type Iniva struct {
 	cancel                 context.CancelFunc
 	currentView            hotstuff.View
 	inSecondChance         bool
+	contributionWait       time.Duration
+	leaderWait             time.Duration
 }
 
 // New returns a new instance of the Handel module.
@@ -87,6 +83,15 @@ func (r *Iniva) InitModule(mods *modules.Core) {
 	r.eventLoop.RegisterHandler(ACKRecvEvent{}, func(event any) {
 		r.OnACK(event.(ACKRecvEvent))
 	})
+	r.setTimers()
+}
+
+func (r *Iniva) setTimers() {
+	// r.contributionWait = 400 * time.Millisecond
+	// r.leaderWait = 100 * time.Millisecond
+	duration := r.synchronizer.ViewDuration()
+	r.contributionWait = duration / 5
+	r.leaderWait = duration / 10
 }
 
 func (r *Iniva) postInit() {
@@ -128,7 +133,7 @@ func (r *Iniva) Begin(s hotstuff.PartialCert, p hotstuff.ProposeMsg) {
 	r.aggregatedContribution = s.Signature()
 	idMappings := r.randomizeIDs(p.Block.Hash(), r.leaderRotation.GetLeader(r.ProposalMsg.Block.View()))
 	r.logger.Debug("id mappings are ", idMappings)
-	// To test second chance.
+	//To test second chance.
 	// if idMappings[r.opts.ID()] == r.configuration.Len()-1 {
 	// 	return
 	// }
@@ -146,6 +151,7 @@ func (r *Iniva) Begin(s hotstuff.PartialCert, p hotstuff.ProposeMsg) {
 
 // OnContributionRecv handles the incoming contributions
 func (r *Iniva) OnContributionRecv(event ContributionRecvEvent) {
+
 	if !r.beginDone || event.Contribution.View != uint64(r.ProposalMsg.Block.View()) {
 		r.logger.Debug("Contribution from ", event.Contribution, "  is ignored for view ", r.ProposalMsg.Block.View())
 		return
@@ -201,7 +207,7 @@ func (r *Iniva) performSecondChance() {
 	proposal := r.ProposalMsg
 	proposal.SecondChance = true
 	subConfig.Propose(proposal)
-	context, cancel := context.WithTimeout(context.Background(), leaderWait)
+	context, cancel := context.WithTimeout(context.Background(), r.leaderWait)
 	r.cancel = cancel
 	go func() {
 		<-context.Done()
@@ -212,10 +218,14 @@ func (r *Iniva) performSecondChance() {
 					r.ProposalMsg.Block.Hash())))
 			r.eventLoop.AddEvent(hotstuff.QCCreateEvent{QCLength: r.aggregatedContribution.Participants().Len()})
 		} else {
-
-			r.synchronizer.AdvanceView(hotstuff.NewSyncInfo().WithQC(r.synchronizer.HighQC()))
-			//Not complete synchronizer advance view to be updated
+			r.logger.Debug(" Unable to create a QC so waiting for timeout")
 		}
+		// This is the leader failure case, synchronizer should move to next view
+		// } else {
+
+		// 	r.synchronizer.AdvanceView(hotstuff.NewSyncInfo().WithQC(r.synchronizer.HighQC()))
+		// 	//Not complete synchronizer advance view to be updated
+		// }
 	}()
 }
 
@@ -228,9 +238,8 @@ func (r *Iniva) sendProposalToChildren(proposal hotstuff.ProposeMsg) {
 		return
 	}
 	config.Propose(proposal)
-	context, cancel := context.WithTimeout(context.Background(), contributionWait)
+	context, cancel := context.WithTimeout(context.Background(), r.contributionWait)
 	r.cancel = cancel
-	//go r.waitForContributions(proposal.Block.View())
 	go func() {
 		<-context.Done()
 		if r.tree.IsRoot(r.opts.ID()) {

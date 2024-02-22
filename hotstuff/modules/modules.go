@@ -2,6 +2,7 @@ package modules
 
 import (
 	"context"
+	"time"
 
 	"github.com/relab/hotstuff"
 )
@@ -160,6 +161,8 @@ type Synchronizer interface {
 	HighQC() hotstuff.QuorumCert
 	// Start starts the synchronizer with the given context.
 	Start(context.Context)
+	// ViewDuration gives the current view duration
+	ViewDuration() time.Duration
 }
 
 // Handel is an implementation of the Handel signature aggregation protocol.
