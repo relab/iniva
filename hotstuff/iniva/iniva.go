@@ -210,6 +210,11 @@ func (r *Iniva) performSecondChance() {
 			r.synchronizer.AdvanceView(hotstuff.NewSyncInfo().WithQC(
 				hotstuff.NewQuorumCert(r.aggregatedContribution, r.ProposalMsg.Block.View(),
 					r.ProposalMsg.Block.Hash())))
+			r.eventLoop.AddEvent(hotstuff.QCCreateEvent{QCLength: r.aggregatedContribution.Participants().Len()})
+		} else {
+
+			r.synchronizer.AdvanceView(hotstuff.NewSyncInfo().WithQC(r.synchronizer.HighQC()))
+			//Not complete synchronizer advance view to be updated
 		}
 	}()
 }
@@ -235,6 +240,7 @@ func (r *Iniva) sendProposalToChildren(proposal hotstuff.ProposeMsg) {
 				r.synchronizer.AdvanceView(hotstuff.NewSyncInfo().WithQC(
 					hotstuff.NewQuorumCert(r.aggregatedContribution, r.ProposalMsg.Block.View(),
 						r.ProposalMsg.Block.Hash())))
+				r.eventLoop.AddEvent(hotstuff.QCCreateEvent{QCLength: r.aggregatedContribution.Participants().Len()})
 			} else if r.aggregatedContribution.Participants().Len() > 1 {
 				r.logger.Debug("Performing second Chance ", r.ProposalMsg.Block.View())
 				r.performSecondChance()

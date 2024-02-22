@@ -64,3 +64,7 @@ type NewViewMsg struct {
 type CommitEvent struct {
 	Commands int
 }
+
+type QCCreateEvent struct {
+	QCLength int
+}
