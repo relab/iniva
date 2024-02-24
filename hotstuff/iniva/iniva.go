@@ -24,6 +24,9 @@ func init() {
 	modules.RegisterModule("iniva", New)
 }
 
+// FaultyNodesNum is the number of faulty nodes
+const FaultyNodesNum = 1
+
 // Iniva implements a signature aggregation protocol.
 type Iniva struct {
 	configuration          *backend.Config
@@ -41,7 +44,7 @@ type Iniva struct {
 	beginDone              bool
 	aggregatedContribution hotstuff.QuorumSignature
 	ProposalMsg            hotstuff.ProposeMsg
-	children               []hotstuff.ID
+	children               []hotstuff.ID // This may not be needed.
 	senders                []hotstuff.ID
 	cancel                 context.CancelFunc
 	currentView            hotstuff.View
@@ -90,8 +93,8 @@ func (r *Iniva) setTimers() {
 	// r.contributionWait = 400 * time.Millisecond
 	// r.leaderWait = 100 * time.Millisecond
 	duration := r.synchronizer.ViewDuration()
-	r.contributionWait = duration / 5
-	r.leaderWait = duration / 10
+	r.contributionWait = 2 * (duration / 5)
+	r.leaderWait = duration / 5
 }
 
 func (r *Iniva) postInit() {
@@ -103,7 +106,7 @@ func (r *Iniva) postInit() {
 	inivapb.RegisterInivaServer(r.server.GetGorumsServer(), serviceImpl{r})
 	r.tree = CreateTree(r.configuration.Len(), r.opts.ID())
 	r.initDone = true
-	r.logger.Debug("Iniva: Configuration initialization completed")
+	r.logger.Debug("Iniva: Configuration initialization completed ")
 }
 
 // Begin starts dissemination and aggregation process
@@ -134,9 +137,15 @@ func (r *Iniva) Begin(s hotstuff.PartialCert, p hotstuff.ProposeMsg) {
 	idMappings := r.randomizeIDs(p.Block.Hash(), r.leaderRotation.GetLeader(r.ProposalMsg.Block.View()))
 	r.logger.Debug("id mappings are ", idMappings)
 	//To test second chance.
-	// if idMappings[r.opts.ID()] == r.configuration.Len()-1 {
+	// if idMappings[r.opts.ID()] == r.configuration.Len()-1 || idMappings[r.opts.ID()] == r.configuration.Len()-2 {
 	// 	return
 	// }
+	if r.amIFaulty() {
+		// if !r.tree.IsRoot(r.opts.ID()) {
+		// 	return
+		// }
+		return
+	}
 	r.tree.InitializeWithPIDs(idMappings)
 	r.children = r.tree.GetChildren()
 	if len(r.children) == 0 {
@@ -153,7 +162,8 @@ func (r *Iniva) Begin(s hotstuff.PartialCert, p hotstuff.ProposeMsg) {
 func (r *Iniva) OnContributionRecv(event ContributionRecvEvent) {
 
 	if !r.beginDone || event.Contribution.View != uint64(r.ProposalMsg.Block.View()) {
-		r.logger.Debug("Contribution from ", event.Contribution, "  is ignored for view ", r.ProposalMsg.Block.View())
+		r.logger.Debug("Contribution from ", event.Contribution.ID, "  is ignored for view ",
+			r.ProposalMsg.Block.View())
 		return
 	}
 	contribution := event.Contribution
@@ -163,9 +173,10 @@ func (r *Iniva) OnContributionRecv(event ContributionRecvEvent) {
 	if err != nil {
 		r.logger.Info("Unable to merge the contribution from ", event.Contribution.ID,
 			event.Contribution.View)
-		return
+	} else {
+		r.senders = append(r.senders, hotstuff.ID(contribution.ID))
 	}
-	r.senders = append(r.senders, hotstuff.ID(contribution.ID))
+	//Continue checking for the completion as contributions may be received in any order
 	//In second chance cancel only if all replicas replied
 	if r.inSecondChance && r.aggregatedContribution.Participants().Len() == r.configuration.Len() {
 		r.logger.Debug("Completed aggregation in second chance ")
@@ -176,7 +187,6 @@ func (r *Iniva) OnContributionRecv(event ContributionRecvEvent) {
 		r.logger.Debug("Completed aggregation ")
 		r.cancel()
 	}
-
 }
 
 func (r *Iniva) performSecondChance() {
@@ -211,7 +221,7 @@ func (r *Iniva) performSecondChance() {
 	r.cancel = cancel
 	go func() {
 		<-context.Done()
-		//TODO(Since we are stopping the synchronizer timeout behavior, we need to implement something similar here)
+		//integrated with synchronizer, so handle the view context cancellation to prevent routine leak.
 		if r.aggregatedContribution.Participants().Len() >= hotstuff.QuorumSize(r.configuration.Len()) {
 			r.synchronizer.AdvanceView(hotstuff.NewSyncInfo().WithQC(
 				hotstuff.NewQuorumCert(r.aggregatedContribution, r.ProposalMsg.Block.View(),
@@ -457,4 +467,30 @@ func isSubSet(a, b []hotstuff.ID) bool {
 // ACKRecvEvent is sent when ACK is received.
 type ACKRecvEvent struct {
 	contribution *inivapb.Contribution
+}
+
+func (r *Iniva) selectRandomNodes() []hotstuff.ID {
+	seed := r.opts.SharedRandomSeed() + int64(r.currentView)
+	rand.Seed(seed)
+	totalNodes := r.configuration.Len()
+	ids := make([]hotstuff.ID, 0, totalNodes)
+
+	for id := range r.configuration.Replicas() {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	// Shuffle the list of IDs using the shared random seed.
+	rand.Shuffle(totalNodes, func(i int, j int) { ids[i], ids[j] = ids[j], ids[i] })
+	return ids[:FaultyNodesNum]
+}
+
+func (r *Iniva) amIFaulty() bool {
+	faultyNodes := r.selectRandomNodes()
+	r.logger.Debug("Faulty nodes are ", faultyNodes)
+	for _, id := range faultyNodes {
+		if id == r.opts.ID() {
+			return true
+		}
+	}
+	return false
 }

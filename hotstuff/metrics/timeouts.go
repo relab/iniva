@@ -41,7 +41,7 @@ func (vt *ViewTimeouts) InitModule(mods *modules.Core) {
 
 	logger.Info("ViewTimeouts metric enabled.")
 
-	eventLoop.RegisterHandler(synchronizer.ViewChangeEvent{}, func(event any) {
+	eventLoop.RegisterObserver(synchronizer.ViewChangeEvent{}, func(event any) {
 		vt.viewChange(event.(synchronizer.ViewChangeEvent))
 	})
 
