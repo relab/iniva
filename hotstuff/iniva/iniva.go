@@ -118,6 +118,12 @@ func (r *Iniva) Begin(s hotstuff.PartialCert, p hotstuff.ProposeMsg) {
 		//r.eventLoop.DelayUntil(backend.ConnectedEvent{}, func() { r.Begin(s, p, v) })
 		r.postInit()
 	}
+	if r.amIFaulty(p.Block.View()) {
+		// if !r.tree.IsRoot(r.opts.ID()) {
+		// 	return
+		// }
+		return
+	}
 	if p.SecondChance {
 		r.logger.Debug("Received second chance")
 		//Already seen the proposal, so sending aggregated signature
@@ -140,12 +146,6 @@ func (r *Iniva) Begin(s hotstuff.PartialCert, p hotstuff.ProposeMsg) {
 	// if idMappings[r.opts.ID()] == r.configuration.Len()-1 || idMappings[r.opts.ID()] == r.configuration.Len()-2 {
 	// 	return
 	// }
-	if r.amIFaulty() {
-		// if !r.tree.IsRoot(r.opts.ID()) {
-		// 	return
-		// }
-		return
-	}
 	r.tree.InitializeWithPIDs(idMappings)
 	r.children = r.tree.GetChildren()
 	if len(r.children) == 0 {
@@ -469,8 +469,8 @@ type ACKRecvEvent struct {
 	contribution *inivapb.Contribution
 }
 
-func (r *Iniva) selectRandomNodes() []hotstuff.ID {
-	seed := r.opts.SharedRandomSeed() + int64(r.currentView)
+func (r *Iniva) selectRandomNodes(currentView hotstuff.View) []hotstuff.ID {
+	seed := r.opts.SharedRandomSeed() + int64(currentView)
 	rand.Seed(seed)
 	totalNodes := r.configuration.Len()
 	ids := make([]hotstuff.ID, 0, totalNodes)
@@ -484,8 +484,8 @@ func (r *Iniva) selectRandomNodes() []hotstuff.ID {
 	return ids[:FaultyNodesNum]
 }
 
-func (r *Iniva) amIFaulty() bool {
-	faultyNodes := r.selectRandomNodes()
+func (r *Iniva) amIFaulty(view hotstuff.View) bool {
+	faultyNodes := r.selectRandomNodes(view)
 	r.logger.Debug("Faulty nodes are ", faultyNodes)
 	for _, id := range faultyNodes {
 		if id == r.opts.ID() {
